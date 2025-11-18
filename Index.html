@@ -1,0 +1,775 @@
+Here is the **complete, fully functional, single-file code**. I have optimized it to ensure it fits fully within the response and works smoothly on both Desktop (WASD/Arrows) and Mobile (Dynamic Virtual Joystick).
+
+### Features Added:
+*   **Dynamic Joystick:** Touch anywhere on the screen to spawn the joystick, then drag to move.
+*   **Visual Feedback:** A neon joystick appears under your finger when touching.
+*   **Touch Optimization:** Added CSS `touch-action: none` to prevent the browser from zooming or scrolling while you play.
+
+Save this as `index.html`.
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Neon Survivor</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap');
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+            color: #fff;
+            font-family: 'Orbitron', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            /* Critical for mobile game feel */
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        canvas {
+            box-shadow: 0 0 20px #ff00ff;
+            display: block;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+
+        .hud-top {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 85%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+
+        #xp-bar-container {
+            width: 100%;
+            height: 15px;
+            background: #222;
+            border: 2px solid #fff;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        #xp-bar-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #00ff00, #adff2f);
+            box-shadow: 0 0 10px #00ff00;
+            transition: width 0.2s;
+        }
+
+        .stat-row {
+            display: flex;
+            gap: 15px;
+            font-size: 14px;
+            text-shadow: 0 0 5px cyan;
+            font-weight: bold;
+        }
+
+        /* Modals */
+        .modal {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.95);
+            border: 2px solid #0ff;
+            box-shadow: 0 0 40px #0ff;
+            padding: 20px;
+            text-align: center;
+            pointer-events: auto;
+            display: none;
+            width: 90%;
+            max-width: 450px;
+            border-radius: 10px;
+            z-index: 100;
+        }
+
+        .upgrade-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 15px;
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+
+        .upgrade-card {
+            background: #111;
+            border: 1px solid #444;
+            padding: 15px;
+            cursor: pointer;
+            text-align: left;
+            position: relative;
+            transition: all 0.1s;
+        }
+
+        .upgrade-card:active, .upgrade-card:hover {
+            background: #003333;
+            border-color: #0ff;
+            box-shadow: 0 0 10px #0ff;
+        }
+
+        .upgrade-card h3 { margin: 0 0 5px 0; color: #0ff; font-size: 1em; }
+        .upgrade-card small { color: #ccc; font-size: 0.8em; }
+        .lvl-tag { float: right; color: #ff00ff; font-size: 0.9em; }
+
+        .btn {
+            background: transparent;
+            border: 2px solid #f00;
+            color: #f00;
+            padding: 15px 30px;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.2em;
+            cursor: pointer;
+            margin-top: 20px;
+            text-transform: uppercase;
+        }
+        .btn:active { background: #f00; color: #000; }
+
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas"></canvas>
+
+<div id="ui-layer">
+    <!-- HUD -->
+    <div class="hud-top">
+        <div class="stat-row">
+            <span id="level-display">LVL: 1</span>
+            <span id="timer-display">00:00</span>
+            <span id="hp-display">HP: 100</span>
+        </div>
+        <div id="xp-bar-container">
+            <div id="xp-bar-fill"></div>
+        </div>
+    </div>
+
+    <!-- Level Up Modal -->
+    <div id="level-up-modal" class="modal">
+        <h2 style="color:#0ff; margin:0;">SYSTEM UPGRADE</h2>
+        <p style="font-size:0.9em; color:#aaa;">Select an augmentation module:</p>
+        <div class="upgrade-list" id="upgrade-list"></div>
+    </div>
+
+    <!-- Game Over Modal -->
+    <div id="game-over-screen" class="modal">
+        <h2 style="color:#ff0055; font-size: 2em;">TERMINATED</h2>
+        <p id="final-stats" style="line-height: 1.5;"></p>
+        <button class="btn" onclick="location.reload()">Reboot System</button>
+    </div>
+</div>
+
+<script>
+/** 
+ * ------------------------------------------------------------------
+ * CORE ENGINE
+ * ------------------------------------------------------------------
+ */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d', { alpha: false });
+
+function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+const STATE = { PLAYING: 0, LEVEL_UP: 1, GAME_OVER: 2 };
+let currentState = STATE.PLAYING;
+let frame = 0;
+let timeSeconds = 0;
+
+/** 
+ * ------------------------------------------------------------------
+ * INPUT SYSTEM (Keyboard + Touch Joystick)
+ * ------------------------------------------------------------------
+ */
+const keys = { w:false, a:false, s:false, d:false, ArrowUp:false, ArrowLeft:false, ArrowDown:false, ArrowRight:false };
+
+window.addEventListener('keydown', e => { if(keys.hasOwnProperty(e.key)) keys[e.key] = true; });
+window.addEventListener('keyup', e => { if(keys.hasOwnProperty(e.key)) keys[e.key] = false; });
+
+// Virtual Joystick Data
+const joystick = {
+    active: false,
+    id: null,
+    originX: 0, originY: 0,
+    currX: 0, currY: 0,
+    dx: 0, dy: 0, // Normalized Output
+    radius: 50 // Max visual drag distance
+};
+
+// Touch Handlers
+canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    if(currentState !== STATE.PLAYING) return;
+
+    // If joystick not active, start it with the first touch
+    if(!joystick.active) {
+        const t = e.changedTouches[0];
+        joystick.id = t.identifier;
+        joystick.active = true;
+        joystick.originX = t.clientX;
+        joystick.originY = t.clientY;
+        joystick.currX = t.clientX;
+        joystick.currY = t.clientY;
+        joystick.dx = 0;
+        joystick.dy = 0;
+    }
+}, {passive: false});
+
+canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if(!joystick.active) return;
+
+    for(let i=0; i<e.changedTouches.length; i++) {
+        const t = e.changedTouches[i];
+        if(t.identifier === joystick.id) {
+            joystick.currX = t.clientX;
+            joystick.currY = t.clientY;
+
+            // Math
+            let diffX = joystick.currX - joystick.originX;
+            let diffY = joystick.currY - joystick.originY;
+            let dist = Math.sqrt(diffX*diffX + diffY*diffY);
+
+            // Visual Clamp
+            if(dist > joystick.radius) {
+                const ratio = joystick.radius / dist;
+                joystick.currX = joystick.originX + diffX * ratio;
+                joystick.currY = joystick.originY + diffY * ratio;
+            }
+
+            // Output Normalize
+            if(dist > 5) { // Deadzone
+                joystick.dx = diffX / Math.max(dist, joystick.radius);
+                joystick.dy = diffY / Math.max(dist, joystick.radius);
+            } else {
+                joystick.dx = 0;
+                joystick.dy = 0;
+            }
+            break;
+        }
+    }
+}, {passive: false});
+
+const endTouch = e => {
+    e.preventDefault();
+    for(let i=0; i<e.changedTouches.length; i++) {
+        if(e.changedTouches[i].identifier === joystick.id) {
+            joystick.active = false;
+            joystick.dx = 0;
+            joystick.dy = 0;
+            joystick.id = null;
+        }
+    }
+};
+canvas.addEventListener('touchend', endTouch);
+canvas.addEventListener('touchcancel', endTouch);
+
+/** 
+ * ------------------------------------------------------------------
+ * GAME ENTITIES & DATA
+ * ------------------------------------------------------------------
+ */
+const player = { x:0, y:0, r:15, color:'#0ff', speed:3, hp:100, maxHp:100, level:1, xp:0, nextXp:10, magnet:100, invuln:0 };
+const camera = { x:0, y:0 };
+
+let enemies = [];
+let particles = []; // XP
+let projectiles = [];
+let texts = [];
+let trails = [];
+
+// 10 Power-ups
+const UPGRADES = {
+    pulse: { id:'pulse', name:'Pulse Blaster', desc:'Rapid fire at nearest foe.', type:'w', lvl:1, max:5, cd:60, t:0, dmg:25, spd:10 },
+    orbit: { id:'orbit', name:'Neon Orbit', desc:'Protective balls circle you.', type:'w', lvl:0, max:5, count:1, spd:0.05, dist:60, dmg:15 },
+    bass: { id:'bass', name:'Bass Wave', desc:'Area shockwave.', type:'w', lvl:0, max:5, cd:180, t:0, rad:100, dmg:40 },
+    lance: { id:'lance', name:'Laser Lance', desc:'Horizontal piercing beam.', type:'w', lvl:0, max:5, cd:120, t:0, w:20, dmg:30, dur:15 },
+    rear: { id:'rear', name:'Rear Guard', desc:'Shoots behind you.', type:'w', lvl:0, max:5, cd:70, t:0, dmg:20, spd:8 },
+    homing: { id:'homing', name:'Homing Missile', desc:'Slow tracking projectile.', type:'w', lvl:0, max:5, cd:90, t:0, dmg:35, spd:4 },
+    spread: { id:'spread', name:'Spread Shot', desc:'Fires 3 bullets in a cone.', type:'w', lvl:0, max:5, cd:80, t:0, dmg:15, spd:9 },
+    firewall: { id:'firewall', name:'Firewall', desc:'Leaves damaging trail.', type:'w', lvl:0, max:5, cd:20, t:0, dmg:10, dur:120 },
+    drain: { id:'drain', name:'Data Drain', desc:'Increase XP pickup range.', type:'p', lvl:0, max:3, val:50 },
+    overclock: { id:'overclock', name:'Overclock', desc:'Increase Movement Speed.', type:'p', lvl:0, max:3, val:1 }
+};
+const upgradeKeys = Object.keys(UPGRADES);
+
+/** 
+ * ------------------------------------------------------------------
+ * LOGIC
+ * ------------------------------------------------------------------
+ */
+
+function getNearest(x, y, range) {
+    let near = null, minDist = range**2;
+    for(let e of enemies) {
+        let d = (e.x-x)**2 + (e.y-y)**2;
+        if(d < minDist) { minDist = d; near = e; }
+    }
+    return near;
+}
+
+function spawnEnemy() {
+    // Spawn far outside screen
+    const angle = Math.random() * Math.PI * 2;
+    const rad = Math.max(canvas.width, canvas.height)/2 + 100;
+    const type = Math.random() > 0.9 ? 'tank' : 'basic';
+    const hpScale = 1 + (timeSeconds/60);
+    
+    enemies.push({
+        x: player.x + Math.cos(angle) * rad,
+        y: player.y + Math.sin(angle) * rad,
+        type: type,
+        r: type === 'tank' ? 22 : 12,
+        hp: (type === 'tank' ? 60 : 20) * hpScale,
+        max: (type === 'tank' ? 60 : 20) * hpScale,
+        spd: (type === 'tank' ? 1.5 : 2.2) + Math.random()*0.5,
+        color: type === 'tank' ? '#ff00aa' : '#aa00ff',
+        dmg: type === 'tank' ? 25 : 10,
+        pushX:0, pushY:0
+    });
+}
+
+function damageEnemy(e, amt) {
+    e.hp -= amt;
+    texts.push({x:e.x, y:e.y - 10, txt: Math.floor(amt), life:30});
+    // Knockback
+    const ang = Math.atan2(e.y - player.y, e.x - player.x);
+    e.pushX += Math.cos(ang) * 2;
+    e.pushY += Math.sin(ang) * 2;
+}
+
+function checkLevelUp() {
+    if(player.xp >= player.nextXp) {
+        player.xp -= player.nextXp;
+        player.level++;
+        player.nextXp = Math.floor(player.nextXp * 1.4);
+        currentState = STATE.LEVEL_UP;
+        showUpgrades();
+    }
+    const pct = Math.min(100, (player.xp/player.nextXp)*100);
+    document.getElementById('xp-bar-fill').style.width = pct + '%';
+    document.getElementById('level-display').innerText = 'LVL: ' + player.level;
+}
+
+function showUpgrades() {
+    const list = document.getElementById('upgrade-list');
+    list.innerHTML = '';
+    // Random 3
+    let pool = upgradeKeys.filter(k => UPGRADES[k].lvl < UPGRADES[k].max);
+    // Fisher-Yates Shuffle
+    for(let i=pool.length-1; i>0; i--){
+        const j = Math.floor(Math.random()*(i+1));
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    const choices = pool.slice(0, 3);
+
+    if(choices.length === 0) {
+        list.innerHTML = `<div class="upgrade-card" onclick="selectUpgrade(null)"><h3>System Repair</h3><small>Heal 50 HP</small></div>`;
+    } else {
+        choices.forEach(k => {
+            const u = UPGRADES[k];
+            const isNew = u.lvl === 0;
+            list.innerHTML += `
+                <div class="upgrade-card" onclick="selectUpgrade('${k}')">
+                    <span class="lvl-tag">${!isNew ? 'LVL '+(u.lvl+1) : 'NEW'}</span>
+                    <h3>${isNew?'Unlock':'Upgrade'} ${u.name}</h3>
+                    <small>${u.desc}</small>
+                </div>`;
+        });
+    }
+    document.getElementById('level-up-modal').style.display = 'block';
+}
+
+window.selectUpgrade = function(key) {
+    if(key) {
+        const u = UPGRADES[key];
+        u.lvl++;
+        // Apply scaling
+        if(key==='pulse') { u.cd *= 0.9; u.dmg += 10; }
+        if(key==='orbit') { u.count++; u.spd += 0.02; }
+        if(key==='bass') { u.rad += 20; u.cd -= 15; }
+        if(key==='lance') { u.w += 10; u.dmg += 10; }
+        if(key==='rear') { u.cd -= 5; u.dmg += 5; }
+        if(key==='homing') { u.cd -= 10; u.dmg += 10; }
+        if(key==='spread') { u.cd -= 5; u.dmg += 5; }
+        if(key==='firewall') { u.dur += 30; u.dmg += 5; }
+        // Passives
+        if(key==='drain') player.magnet += u.val;
+        if(key==='overclock') player.speed += u.val;
+    } else {
+        player.hp = Math.min(player.maxHp, player.hp + 50);
+    }
+    document.getElementById('hp-display').innerText = 'HP: ' + Math.floor(player.hp);
+    document.getElementById('level-up-modal').style.display = 'none';
+    currentState = STATE.PLAYING;
+};
+
+function gameOver() {
+    currentState = STATE.GAME_OVER;
+    document.getElementById('game-over-screen').style.display = 'block';
+    document.getElementById('final-stats').innerText = `Survived: ${document.getElementById('timer-display').innerText}<br>Level Reached: ${player.level}`;
+}
+
+/** 
+ * ------------------------------------------------------------------
+ * MAIN LOOP
+ * ------------------------------------------------------------------
+ */
+function loop() {
+    requestAnimationFrame(loop);
+    if(currentState !== STATE.PLAYING) return;
+
+    update();
+    draw();
+}
+
+function update() {
+    frame++;
+    if(frame % 60 === 0) {
+        timeSeconds++;
+        const m = Math.floor(timeSeconds/60).toString().padStart(2,'0');
+        const s = (timeSeconds%60).toString().padStart(2,'0');
+        document.getElementById('timer-display').innerText = `${m}:${s}`;
+    }
+
+    // Movement Logic (Joystick + Keys)
+    let mx = 0, my = 0;
+    if(joystick.active) {
+        mx = joystick.dx;
+        my = joystick.dy;
+    } else {
+        if(keys.w || keys.ArrowUp) my = -1;
+        if(keys.s || keys.ArrowDown) my = 1;
+        if(keys.a || keys.ArrowLeft) mx = -1;
+        if(keys.d || keys.ArrowRight) mx = 1;
+        if(mx!==0 || my!==0) {
+            let len = Math.sqrt(mx*mx + my*my);
+            mx/=len; my/=len;
+        }
+    }
+    
+    player.x += mx * player.speed;
+    player.y += my * player.speed;
+
+    // Camera Follow
+    camera.x = player.x - canvas.width/2;
+    camera.y = player.y - canvas.height/2;
+
+    // --- WEAPONS ---
+    // Pulse
+    if(UPGRADES.pulse.lvl > 0) {
+        UPGRADES.pulse.t--;
+        if(UPGRADES.pulse.t <= 0) {
+            const t = getNearest(player.x, player.y, 600);
+            if(t) {
+                UPGRADES.pulse.t = UPGRADES.pulse.cd;
+                const a = Math.atan2(t.y-player.y, t.x-player.x);
+                projectiles.push({x:player.x, y:player.y, dx:Math.cos(a)*UPGRADES.pulse.spd, dy:Math.sin(a)*UPGRADES.pulse.spd, life:80, r:5, color:'#0ff', dmg:UPGRADES.pulse.dmg, type:'bull'});
+            }
+        }
+    }
+    // Orbit (Logic handled in draw/collision, just damage here)
+    if(UPGRADES.orbit.lvl > 0) {
+        const u = UPGRADES.orbit;
+        const now = Date.now()/1000;
+        for(let i=0; i<u.count; i++) {
+            const a = now * (1+u.spd) + (i * (Math.PI*2/u.count));
+            const ox = player.x + Math.cos(a)*u.dist;
+            const oy = player.y + Math.sin(a)*u.dist;
+            enemies.forEach(e => {
+                if((e.x-ox)**2 + (e.y-oy)**2 < (e.r+10)**2) damageEnemy(e, u.dmg * 0.05);
+            });
+        }
+    }
+    // Bass
+    if(UPGRADES.bass.lvl > 0) {
+        UPGRADES.bass.t--;
+        if(UPGRADES.bass.t<=0) {
+            UPGRADES.bass.t = UPGRADES.bass.cd;
+            projectiles.push({x:player.x, y:player.y, life:20, type:'shock', r:UPGRADES.bass.rad, dmg:UPGRADES.bass.dmg});
+        }
+    }
+    // Lance
+    if(UPGRADES.lance.lvl > 0) {
+        UPGRADES.lance.t--;
+        if(UPGRADES.lance.t<=0) {
+            UPGRADES.lance.t = UPGRADES.lance.cd;
+            projectiles.push({x:player.x, y:player.y, life:UPGRADES.lance.dur, type:'beam', w:UPGRADES.lance.w, dmg:UPGRADES.lance.dmg});
+        }
+    }
+    // Rear
+    if(UPGRADES.rear.lvl > 0) {
+        UPGRADES.rear.t--;
+        if(UPGRADES.rear.t<=0) {
+            UPGRADES.rear.t = UPGRADES.rear.cd;
+            let a = Math.atan2(my, mx) + Math.PI; // Opposite of movement
+            if(mx===0 && my===0) a = Math.random() * Math.PI * 2;
+            projectiles.push({x:player.x, y:player.y, dx:Math.cos(a)*UPGRADES.rear.spd, dy:Math.sin(a)*UPGRADES.rear.spd, life:80, r:8, color:'#fa0', dmg:UPGRADES.rear.dmg, type:'bull', pierce:2});
+        }
+    }
+    // Homing
+    if(UPGRADES.homing.lvl > 0) {
+        UPGRADES.homing.t--;
+        if(UPGRADES.homing.t<=0) {
+            UPGRADES.homing.t = UPGRADES.homing.cd;
+            let a = Math.random()*Math.PI*2;
+            projectiles.push({x:player.x, y:player.y, dx:Math.cos(a)*UPGRADES.homing.spd, dy:Math.sin(a)*UPGRADES.homing.spd, life:150, r:6, color:'#f05', dmg:UPGRADES.homing.dmg, type:'home', spd:UPGRADES.homing.spd});
+        }
+    }
+    // Spread
+    if(UPGRADES.spread.lvl > 0) {
+        UPGRADES.spread.t--;
+        if(UPGRADES.spread.t<=0) {
+            UPGRADES.spread.t = UPGRADES.spread.cd;
+            const t = getNearest(player.x, player.y, 500);
+            const base = t ? Math.atan2(t.y-player.y, t.x-player.x) : Math.random()*Math.PI*2;
+            [-0.3, 0, 0.3].forEach(off => {
+                projectiles.push({x:player.x, y:player.y, dx:Math.cos(base+off)*UPGRADES.spread.spd, dy:Math.sin(base+off)*UPGRADES.spread.spd, life:60, r:4, color:'#ff0', dmg:UPGRADES.spread.dmg, type:'bull', pierce:1});
+            });
+        }
+    }
+    // Firewall
+    if(UPGRADES.firewall.lvl > 0) {
+        UPGRADES.firewall.t--;
+        if(UPGRADES.firewall.t<=0) {
+            UPGRADES.firewall.t = UPGRADES.firewall.cd;
+            trails.push({x:player.x, y:player.y, life:UPGRADES.firewall.dur, r:15, dmg:UPGRADES.firewall.dmg});
+        }
+    }
+
+    // Update Entities
+    // Trails
+    for(let i=trails.length-1; i>=0; i--) {
+        trails[i].life--;
+        if(frame%10===0) {
+            enemies.forEach(e => {
+                if((e.x-trails[i].x)**2 + (e.y-trails[i].y)**2 < (e.r+15)**2) damageEnemy(e, trails[i].dmg);
+            });
+        }
+        if(trails[i].life<=0) trails.splice(i,1);
+    }
+
+    // Projectiles
+    for(let i=projectiles.length-1; i>=0; i--) {
+        let p = projectiles[i];
+        let hit = false;
+
+        if(p.type === 'bull' || p.type === 'home') {
+            if(p.type === 'home') {
+                let t = getNearest(p.x, p.y, 300);
+                if(t) {
+                    let a = Math.atan2(t.y-p.y, t.x-p.x);
+                    p.dx = p.dx*0.92 + Math.cos(a)*p.spd*0.08;
+                    p.dy = p.dy*0.92 + Math.sin(a)*p.spd*0.08;
+                }
+            }
+            p.x += p.dx; p.y += p.dy;
+            p.life--;
+            for(let e of enemies) {
+                if((e.x-p.x)**2 + (e.y-p.y)**2 < (e.r+p.r)**2) {
+                    damageEnemy(e, p.dmg);
+                    hit = true;
+                    if(p.pierce) { p.pierce--; hit=false; } else break;
+                }
+            }
+        } else if (p.type === 'shock') {
+            if(p.life === 20) enemies.forEach(e => { // Hit once
+                if((e.x-p.x)**2 + (e.y-p.y)**2 < (p.r+e.r)**2) damageEnemy(e, p.dmg);
+            });
+            p.life--;
+        } else if (p.type === 'beam') {
+            enemies.forEach(e => {
+                if(Math.abs(e.y - p.y) < p.w) damageEnemy(e, p.dmg*0.1);
+            });
+            p.life--;
+        }
+
+        if(hit || p.life <= 0) projectiles.splice(i, 1);
+    }
+
+    // Enemies
+    if(frame % (60 - Math.min(50, Math.floor(timeSeconds/10))) === 0) {
+        if(enemies.length < 300) spawnEnemy();
+    }
+
+    for(let i=enemies.length-1; i>=0; i--) {
+        let e = enemies[i];
+        // Physics
+        e.x += e.pushX; e.y += e.pushY;
+        e.pushX *= 0.85; e.pushY *= 0.85;
+        
+        const a = Math.atan2(player.y-e.y, player.x-e.x);
+        e.x += Math.cos(a) * e.spd;
+        e.y += Math.sin(a) * e.spd;
+
+        // Collision Player
+        if((player.x-e.x)**2 + (player.y-e.y)**2 < (player.r+e.r)**2) {
+            if(player.invuln <= 0) {
+                player.hp -= e.dmg;
+                player.invuln = 30;
+                document.getElementById('hp-display').innerText = 'HP: ' + Math.max(0, Math.floor(player.hp));
+                if(player.hp <= 0) gameOver();
+            }
+        }
+
+        if(e.hp <= 0) {
+            particles.push({x:e.x, y:e.y, val:5});
+            enemies.splice(i, 1);
+        }
+    }
+    if(player.invuln > 0) player.invuln--;
+
+    // Particles
+    for(let i=particles.length-1; i>=0; i--) {
+        let p = particles[i];
+        let d2 = (player.x-p.x)**2 + (player.y-p.y)**2;
+        if(d2 < player.magnet**2) {
+            p.x += (player.x-p.x)*0.15;
+            p.y += (player.y-p.y)*0.15;
+        }
+        if(d2 < player.r**2) {
+            player.xp += p.val;
+            particles.splice(i, 1);
+            checkLevelUp();
+        }
+    }
+
+    // Texts
+    for(let i=texts.length-1; i>=0; i--) {
+        texts[i].y -= 0.5;
+        texts[i].life--;
+        if(texts[i].life <= 0) texts.splice(i, 1);
+    }
+}
+
+function draw() {
+    // BG
+    ctx.fillStyle = '#050505';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    ctx.save();
+    ctx.translate(-camera.x, -camera.y);
+
+    // Grid
+    ctx.strokeStyle = '#1a0b2e';
+    ctx.lineWidth = 2;
+    const gs = 100;
+    const sx = Math.floor(camera.x/gs)*gs;
+    const sy = Math.floor(camera.y/gs)*gs;
+    ctx.beginPath();
+    for(let x=sx; x<camera.x+canvas.width+gs; x+=gs) { ctx.moveTo(x, camera.y); ctx.lineTo(x, camera.y+canvas.height); }
+    for(let y=sy; y<camera.y+canvas.height+gs; y+=gs) { ctx.moveTo(camera.x, y); ctx.lineTo(camera.x+canvas.width, y); }
+    ctx.stroke();
+
+    // Trails
+    trails.forEach(t => {
+        ctx.fillStyle = `rgba(255, 50, 0, ${t.life/100})`;
+        ctx.beginPath(); ctx.arc(t.x, t.y, t.r, 0, Math.PI*2); ctx.fill();
+    });
+
+    // Gems
+    ctx.shadowBlur = 10; ctx.shadowColor = '#0f0'; ctx.fillStyle = '#0f0';
+    particles.forEach(p => { ctx.beginPath(); ctx.rect(p.x-3, p.y-3, 6, 6); ctx.fill(); });
+
+    // Enemies
+    enemies.forEach(e => {
+        ctx.shadowColor = e.color;
+        ctx.strokeStyle = e.color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        if(e.type === 'tank') { ctx.rect(e.x-e.r, e.y-e.r, e.r*2, e.r*2); }
+        else { ctx.moveTo(e.x+Math.cos(0)*e.r, e.y+Math.sin(0)*e.r); for(let i=1; i<3; i++) ctx.lineTo(e.x+Math.cos(i*2.09)*e.r, e.y+Math.sin(i*2.09)*e.r); ctx.closePath(); }
+        ctx.stroke();
+    });
+
+    // Player
+    if(player.hp > 0) {
+        ctx.shadowColor = '#0ff';
+        ctx.fillStyle = (player.invuln>0 && Math.floor(frame/4)%2===0) ? '#fff' : '#0ff';
+        ctx.save();
+        ctx.translate(player.x, player.y);
+        const angle = (joystick.active) ? Math.atan2(joystick.dy, joystick.dx) : 0; // Rotate to input
+        ctx.rotate(angle); 
+        ctx.beginPath(); ctx.moveTo(15, 0); ctx.lineTo(-10, 10); ctx.lineTo(-10, -10); ctx.fill();
+        ctx.restore();
+    }
+
+    // Orbit
+    if(UPGRADES.orbit.lvl > 0) {
+        const u = UPGRADES.orbit;
+        const now = Date.now()/1000;
+        ctx.fillStyle = '#fff';
+        for(let i=0; i<u.count; i++) {
+            const a = now*(1+u.spd)+(i*(Math.PI*2/u.count));
+            ctx.beginPath(); ctx.arc(player.x+Math.cos(a)*u.dist, player.y+Math.sin(a)*u.dist, 6, 0, Math.PI*2); ctx.fill();
+        }
+    }
+
+    // Projectiles
+    projectiles.forEach(p => {
+        if(p.type === 'bull' || p.type === 'home') {
+            ctx.shadowColor = p.color; ctx.fillStyle = p.color;
+            ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fill();
+        } else if(p.type === 'shock') {
+            ctx.strokeStyle = `rgba(0,255,255,${p.life/20})`; ctx.lineWidth = 5;
+            ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.stroke();
+        } else if(p.type === 'beam') {
+            ctx.fillStyle = `rgba(255,0,255,${p.life/15})`;
+            ctx.fillRect(camera.x, p.y-p.w/2, canvas.width, p.w);
+        }
+    });
+
+    // Text
+    ctx.shadowBlur = 0; ctx.fillStyle = '#fff'; ctx.font = '12px Orbitron';
+    texts.forEach(t => ctx.fillText(t.txt, t.x, t.y));
+
+    ctx.restore();
+
+    // DRAW JOYSTICK (UI Layer)
+    if(joystick.active) {
+        ctx.lineWidth = 2;
+        // Base
+        ctx.strokeStyle = 'rgba(0, 255, 255, 0.3)';
+        ctx.beginPath();
+        ctx.arc(joystick.originX, joystick.originY, joystick.radius, 0, Math.PI*2);
+        ctx.stroke();
+        
+        // Stick
+        ctx.fillStyle = 'rgba(255, 0, 255, 0.8)';
+        ctx.shadowBlur = 10; ctx.shadowColor = '#f0f';
+        ctx.beginPath();
+        ctx.arc(joystick.currX, joystick.currY, 20, 0, Math.PI*2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+    }
+}
+
+loop();
+</script>
+</body>
+</html>
+```
